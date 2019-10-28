@@ -1,0 +1,632 @@
+import pandas as pd
+
+import numpy as np
+
+import re
+
+ 
+
+#IMPORTANT NOTE
+
+#When updating the TwoFour Customer Query file make sure you unzip it instead of just copying it
+
+#into a folder. Copying the file may lead to some data being rounded, which will result in errors.
+
+#The proper way of updating the file is a full extraction ('extract to...').
+
+ 
+
+'''------------------------------------ Load Data -----------------------------------------------'''
+
+#load the df using specified columns and low_memory, which accepts every column to object type
+
+df = pd.read_csv (r'\\pathtothefile\customer.csv',
+
+                  usecols=[0,1,4,6,7,8,9,11,13,14,21,26], dtype={'MANAGERCODEID':"str"}, low_memory=False )
+
+#load additional data
+
+mchdf=pd.read_csv (r'\\mu1pw1024\all_staff_poland\ERM\Credit Risk Support\Applications\Databases\TwoFour\MCH.csv',
+
+                 low_memory=False )
+
+#load cognos WSS data
+
+wssdf=pd.read_csv (r'\\mu1pw1024\all_staff_poland\ERM\Credit Risk Support\Applications\Databases\TwoFour\WSS-cognos.csv',
+
+                  low_memory=False )
+
+df=df.sort_values('PARENTMENMONIC')
+
+ 
+
+#fixing data types as extracting customer query in different ways leads to different data types:
+
+df['CREDITCUSTOMERTYPE'] = df['CREDITCUSTOMERTYPE'].astype(str)
+
+df['CUSTOMERID'] = pd.to_numeric(df['CUSTOMERID'], errors = 'coerce')
+
+df['CUSTOMERID']=df['CUSTOMERID'].astype(str).apply(lambda x: re.sub('\.0', '', x))
+
+df['CUSTOMERMNEMONIC'] = pd.to_numeric(df['CUSTOMERMNEMONIC'], errors = 'coerce')
+
+df['CUSTOMERMNEMONIC']=df['CUSTOMERMNEMONIC'].astype(str).apply(lambda x: re.sub('\.0', '', x))
+
+df['PARENTMENMONIC'] = pd.to_numeric(df['PARENTMENMONIC'], errors = 'coerce')
+
+df['PARENTMENMONIC']=df['PARENTMENMONIC'].astype(str).apply(lambda x: re.sub('\.0', '', x))
+
+wssdf['WSS'] = pd.to_numeric(wssdf['WSS'], errors = 'coerce')
+
+wssdf['WSS']=wssdf['WSS'].astype(str).apply(lambda x: re.sub('\.0', '', x))
+
+ 
+
+ 
+
+'''------------------------------------ Add Parent data to the row  -----------------------------------------------'''
+
+#Additional Parent Details:
+
+parentdf=df.loc[:, ['CUSTOMERMNEMONIC', 'CUSTOMERTYPE',
+
+           'CUSTOMERSTATUS', 'CREDITCUSTOMERTYPE']]
+
+#change the column names to more appropriate ones
+
+#Note: Customermnemonic was changed into Parentmenmonic so that the column does not get duplicated
+
+parentdf.columns =['PARENTMENMONIC', 'PARENT_CUSTOMERTYPE',
+
+           'PARENT_CUSTOMERSTATUS', 'PARENT_CREDITCUSTOMERTYPE']
+
+df=df.merge(parentdf, how='left', left_on='PARENTMENMONIC', right_on='PARENTMENMONIC')
+
+print('merged')
+
+ 
+
+ 
+
+'''------------------------------------ Parent name analysis  -----------------------------------------------'''
+
+#Parents with unusual names (not likely to be useful given a huge number):
+
+#filter out NAMESHORT column using all arguements in the searchfor list:
+
+searchfor =['XCOP', 'UCI ', 'PARENT', 'INDIRECT', 'ZZ', 'A/C']
+
+#na=False ensures we dont get an error with NaNs in our string vector
+
+#'~' returns the opposite boolean, meaning it is NOT contains below:
+
+ 
+
+selector = ((~df.SHORTNAME.str.contains('|'.join(searchfor), na=False))
+
+           & df.SHORTNAME.apply(lambda x:  False if re.match('\w\w\w\w '  , x) else True)
+
+            & (df.CUSTOMERMNEMONIC == df.PARENTMENMONIC)
+
+            & (df.CUSTOMERTYPE == 'FUND'))
+
+df['unusual_parent_name']= selector
+
+print('unusual_parent_name')
+
+ 
+
+ 
+
+'''------------------------------------ Customer Relationship analysis  -----------------------------------------------'''
+
+#check for relationship inconsistencies in the structure:
+
+selector=df.groupby(['PARENTMENMONIC'])['CREDITCUSTOMERTYPE'].apply(','.join)
+
+lista=[]
+
+lista2=[]
+
+for item in df['PARENTMENMONIC']:
+
+    x=selector.loc[item].split(',')
+
+    #take unique values from the list:
+
+    lista.append(set(x))
+
+    #check if there is more than one relationship in a structure
+
+    if len(list(set(x))) == 1:
+
+        lista2.append(False)
+
+    else:
+
+        lista2.append(True)       
+
+df['relationships_in_structure']=lista
+
+df['ambigous_relationship']=lista2
+
+print('ambigous_relationship')
+
+ 
+
+ 
+
+'''------------------------------------ Management analysis  -----------------------------------------------'''
+
+#check for inconsistencies in structure management:
+
+#Add manager Names -  data provided are rounded it multiplies names then
+
+newdf=df.loc[:,['CUSTOMERID','SHORTNAME']]
+
+newdf.columns=['ID','ManagerName']
+
+df=df.merge(newdf,how='left', left_on='MANAGERCODEID',right_on='ID')
+
+print('Adding managername')
+
+ 
+
+df['ManagerName']=df['ManagerName'].astype(str)
+
+selector=df.groupby(['PARENTMENMONIC'])['ManagerName'].apply(','.join)
+
+lista=[]
+
+ 
+
+#ambigous management:
+
+#function funkcja enables us to access the managercodes linked to a single structure (PARENTMENMONIC):
+
+def funkcja (item):
+
+    return (list(set(selector.loc[item].split(','))))
+
+ 
+
+#flag only the structures having more than 2 managers or having exactly two managers but NOT having nan
+
+#and exclude custody parents as well as bank clients:
+
+selector2 = ((df.PARENTMENMONIC.apply(lambda x: True if len(funkcja(x)) > 2 else False)
+
+            | (df.PARENTMENMONIC.apply(lambda x: True if len(funkcja(x)) == 2 else False)
+
+               & (df.PARENTMENMONIC.apply(lambda x: False if ('nan' in funkcja(x)) else True))))
+
+            & (df.PARENT_CREDITCUSTOMERTYPE != 'CUSTODIAN')
+
+            & (df.CUSTOMERTYPE != 'BANK'))
+
+ 
+
+#managament in structure:
+
+for item in df['PARENTMENMONIC']:
+
+    x=selector.loc[item].split(',')
+
+    lista.append(set(x)) 
+
+df['management_in_structure']=lista
+
+df['ambigous_management']=selector2
+
+print('ambigous_management')
+
+ 
+
+ 
+
+'''------------------------------------ Closure analysis  -----------------------------------------------'''
+
+#Accounts that do not have account status closed but their shortname suggests they are closed:
+
+searchfor = ['ZZ', 'A/C', 'CLOSED', 'CLSD']
+
+ 
+
+#fix the type of management_in_structure:
+
+df.management_in_structure = df.management_in_structure.astype(str)
+
+ 
+
+selector1 = (df.CUSTOMERSTATUS == 'ACTIVE')
+
+ 
+
+selector2 = (df.SHORTNAME.str.contains('|'.join(searchfor), na=False))
+
+ 
+
+selector3 = ((df.management_in_structure.apply(lambda x: True if str(x).count(',') == 0 else False))
+
+               & (df.management_in_structure.str.contains('CLOSE PER WSS IM', na=False)))
+
+                                                  
+
+selector4 = ((df.management_in_structure.apply(lambda x: True if str(x).count(',') == 1 else False))
+
+               & (df.management_in_structure.str.contains('CLOSE PER WSS IM', na=False))
+
+                                                   & (df.management_in_structure.str.contains('nan', na=False)))
+
+#combine the logic:                                          
+
+selector = selector1 & (selector2 | selector3 | selector4)
+
+ 
+
+df['Should_be_closed_']= selector
+
+print('Should_be_closed_')
+
+ 
+
+#find instances of active accounts having their parent acocunts closed:
+
+selector = ((df.PARENT_CUSTOMERSTATUS == 'CLOSED') & (df.CUSTOMERSTATUS == 'ACTIVE'))
+
+df['status_mismatch'] = selector
+
+ 
+
+'''------------------------------------ WSS linkage analysis  -----------------------------------------------'''
+
+#Custody child linked to the custody child:
+
+#apply lambda x on shortname means run the matching query from below on every row and
+
+#return True if the match is found. '~' in query means NOT parent accounts
+
+selector = (df.SHORTNAME.apply(lambda x:  True if re.match('\w\w\w\w '  , x) else False)
+
+            & (df.PARENTSHORTNAME.apply(lambda x: True if re.match('\w\w\w\w '  , x) else False))
+
+            & (~(df.PARENTMENMONIC == df.CUSTOMERMNEMONIC))
+
+            & (df.CREDITCUSTOMERTYPE == 'CUSTODIAN'))
+
+df['cuschild_to_cuschild']=selector
+
+ 
+
+#3rd party child linked to 3rd party child:
+
+selector = (df.SHORTNAME.apply(lambda x:False if re.match('XCOPA'  , x) else True)
+
+            & (df.PARENTSHORTNAME.apply(lambda x:False if re.match('XCOPA'  , x) else True))
+
+            & (~(df.PARENTMENMONIC == df.CUSTOMERMNEMONIC))
+
+            & (df.CREDITCUSTOMERTYPE=='THIRDPARTY'))
+
+df['3rdchild_to_3rdchild']=selector
+
+print('3rdchild_to_3rdchild')
+
+ 
+
+#Custody child linked to 3rd party parent
+
+selector = (df.SHORTNAME.apply(lambda x:  True if re.match('\w\w\w\w '  , x) else False)
+
+            & (df.CREDITCUSTOMERTYPE == 'CUSTODIAN')
+
+            & (df.SHORTNAME.apply(lambda x:  False if re.match('OFFBOOK'  , x) else True))
+
+            & (df.PARENTSHORTNAME.apply(lambda x:True if re.match('XCOPA'  , x) else False)))
+
+df['cuschild_to_3rdparent'] = selector
+
+ 
+
+#3rd party child linked to custody parent:
+
+selector = (df.SHORTNAME.apply(lambda x: False if re.match('XCOPA', x) else True)
+
+            & (df.CREDITCUSTOMERTYPE == 'THIRDPARTY')
+
+            & df.PARENTSHORTNAME.apply(lambda x: True if re.match('UCI ', x) else False))
+
+df['3rdchild_to_cusparent'] = selector
+
+ 
+
+ 
+
+'''------------------------------------ MCH/WSS/UCI linkage analysis  -----------------------------------------------'''
+
+#4 first characters of the string
+
+df['IMPLIED_MCH'] = df.SHORTNAME.apply(lambda x:  x[:4])
+
+print('IMPLIED_MCH')
+
+ 
+
+#custody only accounts are needed as others such as banks will return faulty MCH codes from a line above:
+
+df.loc[df.CREDITCUSTOMERTYPE != 'CUSTODIAN', 'IMPLIED_MCH'] = 'THIRDPARTY'
+
+df=df.merge(mchdf, how='left', left_on='IMPLIED_MCH', right_on='MCH')
+
+ 
+
+#align the data types in columns used in a join statement:
+
+df.CUSTOMERMNEMONIC=df.CUSTOMERMNEMONIC.astype(str)
+
+ 
+
+#removing .0s as for some reason UCIs get loaded as floats:
+
+df['UCI_LINKED_TO_MCH']=df['UCI_LINKED_TO_MCH'].astype(str).apply(lambda x: re.sub('\.0', '', x))
+
+wssdf.WSS=wssdf.WSS.astype(str)
+
+df = df.merge(wssdf, how='left', left_on='CUSTOMERMNEMONIC', right_on='WSS')
+
+ 
+
+#change the values to string and remove .0 if any were fed into the dataframe
+
+df['UCI_LINKED_TO_WSS'] =df['UCI_LINKED_TO_WSS'].astype(str).apply(lambda x: re.sub('\.0', '', x))
+
+ 
+
+#find the instances of WSS accounts and connected MCH accounts linked to 2 different UCIs:
+
+selector = ((df['UCI_LINKED_TO_MCH'] != df['UCI_LINKED_TO_WSS'])
+
+            & (df['UCI_LINKED_TO_MCH'] !='nan')
+
+            & (df['UCI_LINKED_TO_WSS'] !='nan')
+
+            & (df['MCH'] !='THIRDPARTY'))
+
+df['MCH_WSS_MISMATCH'] = selector
+
+ 
+
+#create a temp column stripping parentshortname from non-digits:
+
+df['STRIPPED_PARENTSHORTNAME'] = df.PARENTSHORTNAME.apply(lambda x: re.sub("\D", "", x))
+
+ 
+
+#find mismatched custody accounts checked with parentshortname:
+
+#IMPORTANT: below could be changed as it now flags the instances where the WSS account is linked properly but
+
+#the implied MCH account is not
+
+selector= ((df.PARENTSHORTNAME.apply(lambda x: True if re.match('UCI ',x) else False )
+
+           & (((df['STRIPPED_PARENTSHORTNAME'] != df['UCI_LINKED_TO_MCH']) & (df['UCI_LINKED_TO_MCH'] !='nan'))
+
+           | ((df['STRIPPED_PARENTSHORTNAME'] != df['UCI_LINKED_TO_WSS']) & (df['UCI_LINKED_TO_WSS'] !='nan')))
+
+           ))
+
+df['PARENTSHORTNAME_MISMATCH'] = selector
+
+print('PARENTSHORTNAME_MISMATCH')
+
+ 
+
+#check for inconsistencies in UCI linkage in a WSS structure:
+
+df['UCI_LINKED_TO_WSS']=df['UCI_LINKED_TO_WSS'].astype(str)
+
+selector=df.groupby(['PARENTMENMONIC'])['UCI_LINKED_TO_WSS'].apply(','.join)
+
+lista=[]
+
+lista2=[]
+
+for item in df['PARENTMENMONIC']:
+
+    x=selector.loc[item].split(',')
+
+    #take unique values from the list:
+
+    lista.append(set(x))
+
+    #check if there is more than one relationship in a structure
+
+    if len(list(set(x))) == 1 or (len(list(set(x))) == 2 and ('nan'in list(set(x)))):
+
+        lista2.append(False)
+
+    else:
+
+        lista2.append(True)       
+
+df['UCI_in_structure']=lista
+
+df['ambigous_UCI']=lista2
+
+print('ambigous_UCI')
+
+ 
+
+#find orphaned WSS acconts (not linked to the UCI in CMS):
+
+selector = (
+
+            (df.PARENTMENMONIC == df.CUSTOMERMNEMONIC)
+
+            & (df.UCI_LINKED_TO_WSS == 'nan')
+
+            & (df.UCI_LINKED_TO_MCH != 'nan')
+
+            )
+
+df['orphans'] = selector
+
+print('orphans')
+
+ 
+
+'''----- Orphan query Piotr------
+
+ 
+
+selector= df.groupby(['UCI_LINKED_TO_WSS'])['SHORTNAME'].apply(','.join)
+
+ 
+
+selector2 = (
+
+            (df.PARENTMENMONIC == df.CUSTOMERMNEMONIC)
+
+            & (df.UCI_LINKED_TO_WSS == 'nan')
+
+            & (df.UCI_LINKED_TO_MCH != 'nan')
+
+            )
+
+ 
+
+lista=[]
+
+ 
+
+for item in df['UCI_LINKED_TO_MCH'].values:
+
+    if item in df['UCI_LINKED_TO_WSS'][selector2].values:
+
+        x='UCI ' + item
+
+        if x in selector[item]:
+
+            lista.append(True)
+
+        else:
+
+            lista.append(False)
+
+    else:
+
+        lista.append(False)
+
+       
+
+df['new thingy']=lista'''
+
+ 
+
+'''----- Orphan query Artur------  !!! not working as it returns False only
+
+#orphaned accounts:
+
+def orphan(x):
+
+    idx = df[df.SHORTNAME == x].index
+
+    mch = df.loc[idx, 'UCI_LINKED_TO_MCH']
+
+    name = 'UCI ' + str(mch)
+
+    smallerdf = df[(df['PARENTMENMONIC']==df['CUSTOMERMNEMONIC']) &(df.CREDITCUSTOMERTYPE == 'CUSTODIAN')]
+
+    found = smallerdf[smallerdf['SHORTNAME'].str.contains(name)]
+
+    if len(found) == 0:
+
+        return False
+
+    else:
+
+        return True
+
+ 
+
+selector = (
+
+            (df.PARENTMENMONIC == df.CUSTOMERMNEMONIC)
+
+            & (df.CREDITCUSTOMERTYPE == 'CUSTODIAN')
+
+            & (df.SHORTNAME.apply(lambda x:  True if re.match('\w\w\w\w '  , x) else False))
+
+            & (df.UCI_LINKED_TO_WSS == 'nan')
+
+            & (df.UCI_LINKED_TO_MCH != 'nan')
+
+            )
+
+lista2=[]
+
+for item in df.SHORTNAME:
+
+    if item in df.SHORTNAME[selector]:
+
+        lista2.append(orphan(item))
+
+    else:
+
+        lista2.append(False)
+
+ 
+
+selector = (
+
+            (selector)
+
+            & (lista2)
+
+            )
+
+df['Orphaned_WSS'] = selector  
+
+'''
+
+ 
+
+ 
+
+'''------------------------------------ Drop additional columns  -----------------------------------------------'''
+
+#clean-up:
+
+#df=df.drop(axis=1, columns=['STRIPPED_PARENTSHORTNAME', 'MCH', 'WSS']) - works in Python 3.7.1 but not 3.6
+
+#3.6 version:
+
+df=df.drop(['STRIPPED_PARENTSHORTNAME', 'MCH', 'WSS', 'ID'],axis=1)
+
+ 
+
+'''------------------------------------ Save output file  -----------------------------------------------'''
+
+ 
+
+df.to_csv('current_output.csv', sep=',', index=False)
+
+ 
+
+Kind regards,
+
+ 
+
+Artur Stypulkowski
+
+Risk Management Analyst, Senior Associate
+
+State Street Bank International GmbH spółka z ograniczoną odpowiedzialnością oddział w Polsce | [Enterprise Risk Management] | Biurowiec Edison, ul. Kołowa 8, 30-134 Kraków, Polska
+T +48 12 390 5843  |  AStypulkowski@StateStreet.com
+
+ 
+
+...
+
+[Message clipped]  Pokaż całą wiadomość
