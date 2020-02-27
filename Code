@@ -26,15 +26,11 @@ df = pd.read_csv (r'\\pathtothefile\customer.csv',
 
 #load additional data
 
-mchdf=pd.read_csv (r'\\mu1pw1024\all_staff_poland\ERM\Credit Risk Support\Applications\Databases\TwoFour\MCH.csv',
-
-                 low_memory=False )
+mchdf=pd.read_csv (r'\\path\MCH.csv', low_memory=False )
 
 #load cognos WSS data
 
-wssdf=pd.read_csv (r'\\mu1pw1024\all_staff_poland\ERM\Credit Risk Support\Applications\Databases\TwoFour\WSS-cognos.csv',
-
-                  low_memory=False )
+wssdf=pd.read_csv (r'\\path\WSS-cognos.csv', low_memory=False )
 
 df=df.sort_values('PARENTMENMONIC')
 
@@ -612,21 +608,3 @@ df=df.drop(['STRIPPED_PARENTSHORTNAME', 'MCH', 'WSS', 'ID'],axis=1)
 
 df.to_csv('current_output.csv', sep=',', index=False)
 
- 
-
-Kind regards,
-
- 
-
-Artur Stypulkowski
-
-Risk Management Analyst, Senior Associate
-
-State Street Bank International GmbH spółka z ograniczoną odpowiedzialnością oddział w Polsce | [Enterprise Risk Management] | Biurowiec Edison, ul. Kołowa 8, 30-134 Kraków, Polska
-T +48 12 390 5843  |  AStypulkowski@StateStreet.com
-
- 
-
-...
-
-[Message clipped]  Pokaż całą wiadomość
